@@ -1,6 +1,7 @@
 #include "unp.h"
 int main(int argc, char** argv){
-	int sockfd;
+	char recvline[MAXLINE + 1];
+	int sockfd, n;
 	struct sockaddr_in servaddr;
 	if(argc != 2){
 		err_quit("usage error");
@@ -17,6 +18,16 @@ int main(int argc, char** argv){
 	if(connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0){
 		err_sys("unable to connect");
 	}
+	while((n = read(sockfd, recvline, MAXLINE)) > 0){
+		recvline[n] = 0;
+		if(fputs(recvline, stdout) == EOF){
+			err_sys("fputs error");
+		}
+	}
+	if(n < 0){
+		err_sys("read error");
+	}
+	close(sockfd);
 }
 
 
