@@ -12,32 +12,70 @@ int sockfd_to_family(int sockfd);
 void str_echo(int sockfd);
 void sig_chld(int signo);
 int main(int argc, char **argv){
-	int listenfd, connfd;
-	pid_t childpid;
+	int listenfd, connfd, i, maxi, maxfd, sockfd;
 	char buff[MAXLINE];
-	socklen_t clilen;
+	int nready, client[FD_SETSIZE];
 	struct sockaddr_in servaddr, cliaddr;
+	fd_set rset, allset;
+	socklen_t clilen;
+	ssize_t n;
+
 	listenfd = Socket(AF_INET, SOCK_STREAM, 0);
+
 	bzero(&servaddr, sizeof(servaddr));
 	servaddr.sin_port = htons(SERV_PORT);
 	servaddr.sin_family = AF_INET;
 	servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+
 	Bind(listenfd, (struct sockaddr*)&servaddr, sizeof(servaddr));
+
 	Listen(listenfd, LISTENQ);
-	Signal(SIGCHLD, sig_chld);
+	maxfd = listenfd;
+	maxi = -1;
+	for(i = 0; i < FD_SETSIZE; i++){
+		client[i] = -1;
+	}
+	FD_ZERO(&allset);
+	FD_SET(listenfd, &allset);
 	while(1){
-		clilen = sizeof(cliaddr);
-		connfd = Accept(listenfd, (SA*)&cliaddr, &clilen);
-//		Getsockname(connfd, (SA*)&cliaddr, &len);
-//		printf("local addr :%s\n", Sock_ntop((SA*) &cliaddr, len));
-//		printf("%d\n", sockfd_to_family(connfd));
-		printf("connenction from %s, port %d\n", Inet_ntop(AF_INET, &cliaddr.sin_addr, buff, sizeof(buff)), ntohs(cliaddr.sin_port));
-		if((childpid = fork()) == 0){
-			Close(listenfd);
-			sum_serv(connfd);
-			exit(0);
-		}	
-		Close(connfd);
+		rset = allset;
+		nready = Select(maxfd + 1, &rset, NULL, NULL, NULL);
+		if(FD_ISSET(listenfd, &rset)){			
+			clilen = sizeof(cliaddr);
+			connfd = Accept(listenfd, (SA*)&cliaddr, &clilen);
+			printf("connenction from %s, port %d\n", Inet_ntop(AF_INET, &cliaddr.sin_addr, buff, sizeof(buff)), ntohs(cliaddr.sin_port));
+			for(i = 0; i < FD_SETSIZE; i++){
+				if(client[i] == -1){
+					client[i] = connfd;
+					break;
+				}
+			}
+			if(i == FD_SETSIZE){
+				err_quit("too many clients");
+			}	
+			FD_SET(connfd, &allset);
+			maxfd = connfd > maxfd ? connfd : maxfd;
+			maxi = i > maxi ? i : maxi;
+			if(--nready <= 0){
+				continue;
+			}
+		}
+		for(i = 0; i <= maxi; i++){
+			if((sockfd = client[i]) >= 0){
+				if(FD_ISSET(sockfd, &rset)){
+					if((n = Read(sockfd, buff, MAXLINE)) == 0){
+						Close(sockfd);
+						FD_CLR(sockfd, &allset);
+						client[i] = -1;
+					}else{
+						Writen(sockfd, buff, n);
+					}
+					if(--nready <= 0){
+						break;
+					}
+				}
+			}
+		}
 	}
 }
 void sum_serv(int sockfd){
