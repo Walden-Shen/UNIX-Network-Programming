@@ -1,4 +1,5 @@
 #include "unp.h"
+#define OPEN_MAX 100
 struct args{
 	long arg1;
 	long arg2;
@@ -12,13 +13,13 @@ int sockfd_to_family(int sockfd);
 void str_echo(int sockfd);
 void sig_chld(int signo);
 int main(int argc, char **argv){
-	int listenfd, connfd, i, maxi, maxfd, sockfd;
+	int listenfd, connfd, i, maxi, sockfd;
 	char buff[MAXLINE];
-	int nready, client[FD_SETSIZE];
+	int nready;
 	struct sockaddr_in servaddr, cliaddr;
-	fd_set rset, allset;
 	socklen_t clilen;
 	ssize_t n;
+	struct pollfd client[OPEN_MAX];
 
 	listenfd = Socket(AF_INET, SOCK_STREAM, 0);
 
@@ -30,52 +31,49 @@ int main(int argc, char **argv){
 	Bind(listenfd, (struct sockaddr*)&servaddr, sizeof(servaddr));
 
 	Listen(listenfd, LISTENQ);
-	maxfd = listenfd;
-	maxi = -1;
-	for(i = 0; i < FD_SETSIZE; i++){
-		client[i] = -1;
+	maxi = 0;
+	client[0].fd = listenfd;
+	client[0].events = POLLRDNORM;
+	for(i = 1; i < OPEN_MAX; i++){
+		client[i].fd = -1;
 	}
-	FD_ZERO(&allset);
-	FD_SET(listenfd, &allset);
 	while(1){
-		rset = allset;
-		nready = Select(maxfd + 1, &rset, NULL, NULL, NULL);
-		if(FD_ISSET(listenfd, &rset)){			
+		nready = Poll(client, maxi + 1, INFTIM);
+		if(client[0].revents & POLLRDNORM){			
 			clilen = sizeof(cliaddr);
 			connfd = Accept(listenfd, (SA*)&cliaddr, &clilen);
 			printf("connenction from %s, port %d\n", Inet_ntop(AF_INET, &cliaddr.sin_addr, buff, sizeof(buff)), ntohs(cliaddr.sin_port));
-			for(i = 0; i < FD_SETSIZE; i++){
-				if(client[i] == -1){
-					client[i] = connfd;
+			for(i = 1; i < OPEN_MAX; i++){
+				if(client[i].fd == -1){
+					client[i].fd = connfd;
 					break;
 				}
 			}
-			if(i == FD_SETSIZE){
+			if(i == OPEN_MAX){
 				err_quit("too many clients");
-			}	
-			FD_SET(connfd, &allset);
-			maxfd = connfd > maxfd ? connfd : maxfd;
+			}
+			client[i].events = POLLRDNORM;
 			maxi = i > maxi ? i : maxi;
 			if(--nready <= 0){
 				continue;
 			}
 		}
-		for(i = 0; i <= maxi; i++){
-			if((sockfd = client[i]) >= 0){
-				if(FD_ISSET(sockfd, &rset)){
-					if((n = Read(sockfd, buff, MAXLINE)) == 0){
-						Close(sockfd);
-						FD_CLR(sockfd, &allset);
-						client[i] = -1;
-					}else{
+		for(i = 1; i <= maxi; i++){
+			if((sockfd = client[i].fd) >= 0){
+				if(client[i].revents & (POLLRDNORM | POLLERR)){
+					if((n = Read(sockfd, buff, MAXLINE)) == 0 || errno == ECONNRESET){							Close(sockfd);
+						client[i].fd = -1;
+					}else if(n > 0){
 						Writen(sockfd, buff, n);
-					}
+					}else{
+						err_sys("read error");
+					}	
 					if(--nready <= 0){
 						break;
-					}
+					}			
 				}
 			}
-		}
+		}		
 	}
 }
 void sum_serv(int sockfd){
